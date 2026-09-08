@@ -2068,19 +2068,30 @@ def get_stock_history(ticker: str):
 
     return result
 # ============================================================
-# SEARCH
+# DYNAMIC SEARCH
 # ============================================================
 
-@app.get("/search/{ticker}")
+@app.get("/search/{query}")
 def search_stock(
-    ticker: str
+    query: str
 ):
 
-    ticker = (
-        ticker
-        .upper()
+    query = (
+        query
         .strip()
     )
+
+    if not query:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Search query cannot be empty"
+        )
+
+    # --------------------------------------------------------
+    # First: search stocks already stored in MySQL.
+    # This makes previously searched stocks very fast.
+    # --------------------------------------------------------
 
     connection = None
     cursor = None
@@ -2093,6 +2104,8 @@ def search_stock(
             dictionary=True
         )
 
+        search_pattern = f"%{query}%"
+
         cursor.execute(
             """
             SELECT
@@ -2100,41 +2113,33 @@ def search_stock(
                 company_name,
                 sector
             FROM stocks
-            WHERE ticker = %s
+            WHERE
+                ticker LIKE %s
+                OR company_name LIKE %s
+            ORDER BY ticker
+            LIMIT 10
             """,
-            (ticker,)
+            (
+                search_pattern,
+                search_pattern
+            )
         )
 
-        row = cursor.fetchone()
+        rows = cursor.fetchall()
 
-        if row:
+        if rows:
 
             return {
-                "found":
-                    True,
-
-                "stock":
-                    row
+                "found": True,
+                "source": "MySQL",
+                "results": rows
             }
-
-        return {
-            "found":
-                False,
-
-            "ticker":
-                ticker
-        }
 
     except mysql.connector.Error as error:
 
         print(
-            "Search database error:",
+            "Database search warning:",
             error
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail="Search failed"
         )
 
     finally:
@@ -2144,6 +2149,114 @@ def search_stock(
 
         if connection:
             connection.close()
+
+    # --------------------------------------------------------
+    # Second: dynamically search Yahoo Finance.
+    # --------------------------------------------------------
+
+    try:
+
+        print(
+            f"Searching Yahoo Finance for: {query}"
+        )
+
+        yahoo_search = yf.Search(
+            query,
+            max_results=10
+        )
+
+        quotes = (
+            yahoo_search.quotes
+            if yahoo_search
+            else []
+        )
+
+        results = []
+
+        for quote in quotes:
+
+            symbol = (
+                quote.get("symbol")
+                or ""
+            )
+
+            symbol = str(
+                symbol
+            ).upper()
+
+            # ------------------------------------------------
+            # We are interested in Indian NSE stocks.
+            # Yahoo identifies these with .NS.
+            # ------------------------------------------------
+
+            if not symbol.endswith(".NS"):
+                continue
+
+            ticker = symbol[:-3]
+
+            company_name = (
+                quote.get("longname")
+                or quote.get("shortname")
+                or ticker
+            )
+
+            exchange = (
+                quote.get("exchange")
+                or ""
+            )
+
+            quote_type = (
+                quote.get("quoteType")
+                or ""
+            )
+
+            results.append(
+                {
+                    "ticker":
+                        ticker,
+
+                    "company_name":
+                        company_name,
+
+                    "sector":
+                        "Unknown",
+
+                    "exchange":
+                        exchange,
+
+                    "quote_type":
+                        quote_type,
+
+                    "yahoo_symbol":
+                        symbol,
+                }
+            )
+
+        if results:
+
+            return {
+                "found": True,
+                "source": "Yahoo Finance",
+                "results": results
+            }
+
+        return {
+            "found": False,
+            "query": query,
+            "results": []
+        }
+
+    except Exception as error:
+
+        print(
+            "Yahoo search error:",
+            error
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to search Yahoo Finance"
+        )
 
 
 # ============================================================

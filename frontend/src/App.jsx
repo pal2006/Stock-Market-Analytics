@@ -652,26 +652,81 @@ catch (historyError) {
   }
 
 }
-  // ==========================================================
-  // SEARCH
-  // ==========================================================
+ async function handleSearch(e) {
+  e.preventDefault();
 
-  async function handleSearch(e) {
-    e.preventDefault();
+  const query = search.trim();
 
-    const ticker = search
-      .trim()
-      .toUpperCase();
-
-    if (!ticker) {
-      return;
-    }
-
-    setSearchFocused(false);
-
-    await selectStock(ticker);
+  if (!query) {
+    return;
   }
 
+  setSearchFocused(false);
+  setLoadingAnalysis(true);
+  setError("");
+
+  try {
+
+    // Search dynamically by ticker OR company name
+    const response = await fetch(
+      `${API}/search/${encodeURIComponent(query)}`
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        "Unable to search for the stock."
+      );
+    }
+
+    const data = await response.json();
+
+    console.log(
+      "Dynamic search response:",
+      data
+    );
+
+    if (
+      !data.found ||
+      !Array.isArray(data.results) ||
+      data.results.length === 0
+    ) {
+      throw new Error(
+        `No Indian stock found for "${query}".`
+      );
+    }
+
+    // Backend resolves company name → NSE ticker
+    const matchedStock =
+      data.results[0];
+
+    const resolvedTicker =
+      matchedStock.ticker;
+
+    console.log(
+      "Resolved ticker:",
+      resolvedTicker
+    );
+
+    // Fetch complete analytics using the resolved ticker
+    await selectStock(
+      resolvedTicker
+    );
+
+  } catch (err) {
+
+    console.error(
+      "Dynamic search error:",
+      err
+    );
+
+    setError(
+      err?.message ||
+      "Unable to find the stock."
+    );
+
+    setLoadingAnalysis(false);
+  }
+}
   // ==========================================================
   // SEARCH SUGGESTIONS
   // ==========================================================
